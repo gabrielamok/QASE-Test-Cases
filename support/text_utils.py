@@ -1,0 +1,372 @@
+"""
+Text utilities for TestRail to Qase migration.
+Contains functions for text formatting and conversion.
+"""
+
+import re
+from datetime import datetime
+
+
+def convert_testrail_tables_to_markdown(text):
+    """
+    Convert TestRail table format to Markdown format.
+    
+    TestRail format:
+    |||:Remote|:Shipped with Device
+    ||Giga remote|  Giga
+    ||Laredo  |  Austin
+    
+    Markdown format:
+    | Remote | Shipped with Device |
+    |--------|-------------------|
+    | Giga remote | Giga |
+    | Laredo | Austin |
+    
+    Note: The colon (:) prefix in TestRail column headers is automatically removed.
+    
+    Args:
+        text (str): Text that may contain TestRail table format
+        
+    Returns:
+        str: Text with TestRail tables converted to Markdown format
+    """
+    if text is None:
+        return text
+
+    return text   
+
+
+def format_links_as_markdown(text):
+    """
+    Format text by converting TestRail tables to Markdown and formatting URLs as Markdown links.
+    
+    Args:
+        text (str): Text to format
+        
+    Returns:
+        str: Formatted text with tables converted and URLs as Markdown links
+    """
+    if text is None:
+        return None
+
+    # First convert TestRail tables to Markdown
+    text = convert_testrail_tables_to_markdown(text)
+
+    # Fix numbering
+    text = fix_numbering(text)
+
+    # Format URLs as Markdown links
+    url_pattern = re.compile(r'(?<!\]\()(?<!\])\b(http[s]?://[^\s]+)')
+    formatted_text = url_pattern.sub(r'[\1](\1)', text)
+
+    return formatted_text
+
+
+def fix_numbering(text):
+    """
+    Fix numbering in text by converting 0-based numbering to 1-based numbering.
+    
+    This function finds lines that start with a number followed by a dot and space,
+    and converts them from 0-based to 1-based numbering. Each separate block of
+    numbered lines is numbered independently starting from 1.
+    
+    Example:
+    Input:
+    0. Select Settings
+    0. Select Parental controls.
+    Some unnumbered text here
+    0. Enter a pin code such as 1111.
+    0. Select OK.
+    
+    Output:
+    1. Select Settings
+    2. Select Parental controls.
+    Some unnumbered text here
+    1. Enter a pin code such as 1111.
+    2. Select OK.
+    
+    Args:
+        text (str): Text that may contain 0-based numbered lines
+        
+    Returns:
+        str: Text with corrected 1-based numbering
+    """
+    if text is None:
+        return None
+    
+    lines = text.split('\n')
+    result_lines = []
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check if this line starts with a number followed by a dot and space
+        numbering_match = re.match(r'^(\d+)\. ', line)
+        
+        if numbering_match:
+            # Found a numbered line, process the entire block of numbered lines
+            block_start = i
+            block_number = 1  # Start numbering from 1 for this block
+            
+            # Process all consecutive numbered lines
+            while i < len(lines):
+                current_line = lines[i]
+                current_match = re.match(r'^(\d+)\. ', current_line)
+                
+                if current_match:
+                    # Replace the number with the new sequential number
+                    new_line = re.sub(r'^\d+\. ', f'{block_number}. ', current_line)
+                    result_lines.append(new_line)
+                    block_number += 1
+                    i += 1
+                else:
+                    # Non-numbered line, break the block
+                    break
+        else:
+            # Non-numbered line, add as is
+            result_lines.append(line)
+            i += 1
+    
+    return '\n'.join(result_lines)
+
+
+def convert_testrail_date_to_iso(date_string):
+    """
+    Convert TestRail date format to ISO format for Qase datetime fields.
+    
+    TestRail formats supported:
+    - M/D/YYYY (e.g., "3/23/2023")
+    - MM/D/YYYY (e.g., "03/23/2023")
+    - M/DD/YYYY (e.g., "3/23/2023")
+    - MM/DD/YYYY (e.g., "03/23/2023")
+    
+    Output format: YYYY-MM-DD HH:MM:SS (e.g., "2023-03-23 00:00:00")
+    
+    Args:
+        date_string (str): Date string in TestRail format
+        
+    Returns:
+        str: Date string in ISO format, or original string if conversion fails
+    """
+    if not date_string or not isinstance(date_string, str):
+        return date_string
+    
+    # Remove any whitespace
+    date_string = date_string.strip()
+    
+    # Try different date formats
+    date_formats = [
+        '%m/%d/%Y',      # M/D/YYYY or MM/DD/YYYY
+        '%m/%d/%y',      # M/D/YY or MM/DD/YY
+        '%d/%m/%Y',      # D/M/YYYY or DD/MM/YYYY
+        '%d/%m/%y',      # D/M/YY or DD/MM/YY
+        '%Y-%m-%d',      # YYYY-MM-DD
+        '%Y/%m/%d',      # YYYY/MM/DD
+    ]
+    
+    for date_format in date_formats:
+        try:
+            parsed_date = datetime.strptime(date_string, date_format)
+            # Convert to ISO format with time set to 00:00:00
+            return parsed_date.strftime('%Y-%m-%d %H:%M:%S')
+        except ValueError:
+            continue
+    
+    # If no format matches, return original string
+    return date_string
+
+
+def convert_estimate_time_to_hours(estimate_string):
+    """
+    Convert TestRail estimate time format to simplified format.
+    
+    TestRail API returns detailed format like: '1wk 1d 1hr 1min 1sec'
+    We need to return simplified format like: '1 week 1 day'
+    
+    Conversion rules:
+    - Take only the first two time units from the estimate
+    - For first two values: keep them separate without combining
+    - Apply rounding only if there are more than 2 values
+    - Return in simplified format (not converted to hours)
+    
+    Examples:
+    - "1wk 1d 1hr 1min 1sec" -> "1 week 1 day"
+    - "5hr 30min" -> "5 hours 30 minutes" (keep separate)
+    - "1hr 1min 1sec" -> "1 hour 1 minute"
+    - "2wk 3d 2hr 30min" -> "2 week 3 day"
+    
+    Args:
+        estimate_string (str): Estimate string in TestRail API format
+        
+    Returns:
+        str: Simplified estimate format, or original string if conversion fails
+    """
+    if not estimate_string or not isinstance(estimate_string, str):
+        return estimate_string
+    
+    # Remove any whitespace
+    estimate_string = estimate_string.strip()
+    
+    if not estimate_string:
+        return estimate_string
+    
+    # Parse the estimate string to extract time units
+    import re
+    import math
+    
+    # Pattern to match number + unit pairs
+    pattern = r'(\d+(?:\.\d+)?)\s*(wk|week|d|day|hr|hour|h|min|minute|m|sec|second)s?'
+    matches = re.findall(pattern, estimate_string, re.IGNORECASE)
+    
+    if not matches:
+        # If no matches found, return original string
+        return estimate_string
+    
+    # Take the first two time units, but handle special cases
+    first_two_units = matches[:2]
+    
+    # Special case: if we have "1d 3h 50m", we need to take days and combine hours+minutes
+    if len(matches) >= 3:
+        first_unit = matches[0][1].lower()
+        second_unit = matches[1][1].lower()
+        third_unit = matches[2][1].lower()
+        
+        # If first is days, second is hours, third is minutes, combine hours+minutes
+        if (first_unit in ['d', 'day'] and 
+            second_unit in ['hr', 'hour', 'h'] and 
+            third_unit in ['min', 'minute', 'm']):
+            try:
+                days = float(matches[0][0])
+                hours = float(matches[1][0])
+                minutes = float(matches[2][0])
+                
+                result_parts = []
+                
+                # Round days
+                rounded_days = math.ceil(days)
+                if rounded_days > 0:
+                    result_parts.append(f"{rounded_days} day{'s' if rounded_days != 1 else ''}")
+                
+                # Combine hours and minutes
+                total_hours = hours + (minutes / 60)
+                rounded_hours = math.ceil(total_hours)
+                if rounded_hours > 0:
+                    result_parts.append(f"{rounded_hours} hour{'s' if rounded_hours != 1 else ''}")
+                
+                # Return early for this special case
+                if result_parts:
+                    return ' '.join(result_parts)
+                else:
+                    return estimate_string
+            except ValueError:
+                pass
+    
+    result_parts = []
+    
+    # Special handling for hours + minutes combination
+    if len(first_two_units) == 2:
+        first_value_str, first_unit = first_two_units[0]
+        second_value_str, second_unit = first_two_units[1]
+        
+        first_unit_lower = first_unit.lower()
+        second_unit_lower = second_unit.lower()
+        
+        # If first is hours and second is minutes, keep them separate for first two values
+        if (first_unit_lower in ['hr', 'hour', 'h'] and second_unit_lower in ['min', 'minute', 'm']):
+            try:
+                hours = float(first_value_str)
+                minutes = float(second_value_str)
+                
+                # For first two values, keep them separate without rounding
+                rounded_hours = math.ceil(hours)
+                rounded_minutes = math.ceil(minutes)
+                
+                if rounded_hours > 0:
+                    result_parts.append(f"{rounded_hours} hour{'s' if rounded_hours != 1 else ''}")
+                if rounded_minutes > 0:
+                    result_parts.append(f"{rounded_minutes} minute{'s' if rounded_minutes != 1 else ''}")
+            except ValueError:
+                pass
+        # Special handling for days + hours combination (like "1d 3h 50m")
+        elif (first_unit_lower in ['d', 'day'] and second_unit_lower in ['hr', 'hour', 'h']):
+            try:
+                days = float(first_value_str)
+                hours = float(second_value_str)
+                
+                # Round days
+                rounded_days = math.ceil(days)
+                if rounded_days > 0:
+                    result_parts.append(f"{rounded_days} day{'s' if rounded_days != 1 else ''}")
+                
+                # Round hours
+                rounded_hours = math.ceil(hours)
+                if rounded_hours > 0:
+                    result_parts.append(f"{rounded_hours} hour{'s' if rounded_hours != 1 else ''}")
+            except ValueError:
+                pass
+        else:
+            # Regular processing for other combinations
+            for value_str, unit in first_two_units:
+                try:
+                    value = float(value_str)
+                    unit_lower = unit.lower()
+                    
+                    # Apply rounding to individual values
+                    rounded_value = math.ceil(value)
+                    
+                    # Skip zero values
+                    if rounded_value == 0:
+                        continue
+                    
+                    # Convert to full word format
+                    if unit_lower in ['wk', 'week']:
+                        result_parts.append(f"{rounded_value} week{'s' if rounded_value != 1 else ''}")
+                    elif unit_lower in ['d', 'day']:
+                        result_parts.append(f"{rounded_value} day{'s' if rounded_value != 1 else ''}")
+                    elif unit_lower in ['hr', 'hour', 'h']:
+                        result_parts.append(f"{rounded_value} hour{'s' if rounded_value != 1 else ''}")
+                    elif unit_lower in ['min', 'minute', 'm']:
+                        result_parts.append(f"{rounded_value} minute{'s' if rounded_value != 1 else ''}")
+                    elif unit_lower in ['sec', 'second']:
+                        result_parts.append(f"{rounded_value} second{'s' if rounded_value != 1 else ''}")
+                            
+                except (ValueError, KeyError):
+                    # Skip invalid values or units
+                    continue
+    else:
+        # Single unit processing
+        for value_str, unit in first_two_units:
+            try:
+                value = float(value_str)
+                unit_lower = unit.lower()
+                
+                # Apply rounding to individual values
+                rounded_value = math.ceil(value)
+                
+                # Skip zero values
+                if rounded_value == 0:
+                    continue
+                
+                # Convert to full word format
+                if unit_lower in ['wk', 'week']:
+                    result_parts.append(f"{rounded_value} week{'s' if rounded_value != 1 else ''}")
+                elif unit_lower in ['d', 'day']:
+                    result_parts.append(f"{rounded_value} day{'s' if rounded_value != 1 else ''}")
+                elif unit_lower in ['hr', 'hour', 'h']:
+                    result_parts.append(f"{rounded_value} hour{'s' if rounded_value != 1 else ''}")
+                elif unit_lower in ['min', 'minute', 'm']:
+                    result_parts.append(f"{rounded_value} minute{'s' if rounded_value != 1 else ''}")
+                elif unit_lower in ['sec', 'second']:
+                    result_parts.append(f"{rounded_value} second{'s' if rounded_value != 1 else ''}")
+                        
+            except (ValueError, KeyError):
+                # Skip invalid values or units
+                continue
+    
+    # Return the result
+    if result_parts:
+        return ' '.join(result_parts)
+    else:
+        # If no valid conversion, return original string
+        return estimate_string
