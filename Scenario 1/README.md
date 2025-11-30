@@ -60,6 +60,7 @@ python-dotenv → Loads environment variables from .env.
 1. Run these commands in Git Bash or Windows PowerShell:
 
 pip install requests python-dotenv
+pip install -r requirements.txt
 
 Usage
 
